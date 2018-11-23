@@ -1607,12 +1607,26 @@ SelectPartitionPage(PINPUT_RECORD Ir)
             {
                 if (PartitionList->CurrentPartition->LogicalPartition)
                 {
+                    Error = LogicalPartitionCreationChecks(PartitionList);
+                    if (Error != NOT_AN_ERROR)
+                    {
+                        MUIDisplayError(Error, Ir, POPUP_WAIT_ANY_KEY);
+                        return SELECT_PARTITION_PAGE;
+                    }
+
                     CreateLogicalPartition(PartitionList,
                                            0ULL,
                                            TRUE);
                 }
                 else
                 {
+                    Error = PrimaryPartitionCreationChecks(PartitionList);
+                    if (Error != NOT_AN_ERROR)
+                    {
+                        MUIDisplayError(Error, Ir, POPUP_WAIT_ANY_KEY);
+                        return SELECT_PARTITION_PAGE;
+                    }
+
                     CreatePrimaryPartition(PartitionList,
                                            0ULL,
                                            TRUE);
@@ -2580,7 +2594,7 @@ DeletePartitionPage(PINPUT_RECORD Ir)
  *  QuitPage
  *
  * SIDEEFFECTS
- *  Sets PartEntry->DiskEntry->LayoutBuffer->PartitionEntry[PartEntry->PartitionIndex].PartitionType (via UpdatePartitionType)
+ *  Calls UpdatePartitionType()
  *  Calls CheckActiveSystemPartition()
  *
  * RETURNS
@@ -3886,10 +3900,10 @@ BootLoaderPage(PINPUT_RECORD Ir)
         DPRINT("Found OS/2 boot manager partition\n");
         InstallOnFloppy = TRUE;
     }
-    else if (PartitionType == PARTITION_EXT2)
+    else if (PartitionType == PARTITION_LINUX)
     {
-        /* Linux EXT2 partition */
-        DPRINT("Found Linux EXT2 partition\n");
+        /* Linux partition */
+        DPRINT("Found Linux native partition (ext2/ext3/ReiserFS/BTRFS/etc)\n");
         InstallOnFloppy = FALSE;
     }
     else if (PartitionType == PARTITION_IFS)
@@ -4105,13 +4119,15 @@ BootLoaderHarddiskVbrPage(PINPUT_RECORD Ir)
 {
     NTSTATUS Status;
 
+    // FIXME! We must not use the partition type, but instead use the partition FileSystem!!
     Status = InstallVBRToPartition(&USetupData.SystemRootPath,
                                    &USetupData.SourceRootPath,
                                    &USetupData.DestinationArcPath,
                                    PartitionList->SystemPartition->PartitionType);
     if (!NT_SUCCESS(Status))
     {
-        MUIDisplayError(ERROR_WRITE_BOOT, Ir, POPUP_WAIT_ENTER);
+        MUIDisplayError(ERROR_WRITE_BOOT, Ir, POPUP_WAIT_ENTER,
+                        PartitionList->SystemPartition->FileSystem->FileSystemName);
         return QUIT_PAGE;
     }
 
@@ -4140,13 +4156,15 @@ BootLoaderHarddiskMbrPage(PINPUT_RECORD Ir)
     WCHAR DestinationDevicePathBuffer[MAX_PATH];
 
     /* Step 1: Write the VBR */
+    // FIXME! We must not use the partition type, but instead use the partition FileSystem!!
     Status = InstallVBRToPartition(&USetupData.SystemRootPath,
                                    &USetupData.SourceRootPath,
                                    &USetupData.DestinationArcPath,
                                    PartitionList->SystemPartition->PartitionType);
     if (!NT_SUCCESS(Status))
     {
-        MUIDisplayError(ERROR_WRITE_BOOT, Ir, POPUP_WAIT_ENTER);
+        MUIDisplayError(ERROR_WRITE_BOOT, Ir, POPUP_WAIT_ENTER,
+                        PartitionList->SystemPartition->FileSystem->FileSystemName);
         return QUIT_PAGE;
     }
 
@@ -4160,7 +4178,7 @@ BootLoaderHarddiskMbrPage(PINPUT_RECORD Ir)
     if (!NT_SUCCESS(Status))
     {
         DPRINT1("InstallMbrBootCodeToDisk() failed (Status %lx)\n", Status);
-        MUIDisplayError(ERROR_INSTALL_BOOTCODE, Ir, POPUP_WAIT_ENTER);
+        MUIDisplayError(ERROR_INSTALL_BOOTCODE, Ir, POPUP_WAIT_ENTER, L"MBR");
         return QUIT_PAGE;
     }
 

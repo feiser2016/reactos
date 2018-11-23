@@ -819,7 +819,10 @@ ScanForUnpartitionedDiskSpace(
         NewPartEntry->DiskEntry = DiskEntry;
 
         NewPartEntry->IsPartitioned = FALSE;
-        NewPartEntry->StartSector.QuadPart = (ULONGLONG)DiskEntry->SectorAlignment;
+        if (DiskEntry->SectorAlignment < 2048)
+            NewPartEntry->StartSector.QuadPart = 2048ULL;
+        else
+            NewPartEntry->StartSector.QuadPart = (ULONGLONG)DiskEntry->SectorAlignment;
         NewPartEntry->SectorCount.QuadPart = AlignDown(DiskEntry->SectorCount.QuadPart, DiskEntry->SectorAlignment) -
                                              NewPartEntry->StartSector.QuadPart;
 
@@ -837,7 +840,10 @@ ScanForUnpartitionedDiskSpace(
     }
 
     /* Start partition at head 1, cylinder 0 */
-    LastStartSector = DiskEntry->SectorAlignment;
+    if (DiskEntry->SectorAlignment < 2048)
+        LastStartSector = 2048ULL;
+    else
+        LastStartSector = DiskEntry->SectorAlignment;
     LastSectorCount = 0ULL;
     LastUnusedSectorCount = 0ULL;
 
@@ -2197,6 +2203,8 @@ UpdateDiskLayout(
         ListEntry = ListEntry->Flink;
     }
 
+    ASSERT(Index <= 4);
+
     /* Update the logical partition table */
     Index = 4;
     ListEntry = DiskEntry->LogicalPartListHead.Flink;
@@ -2350,12 +2358,13 @@ GetNextUnpartitionedEntry(
     return NULL;
 }
 
-VOID
+BOOLEAN
 CreatePrimaryPartition(
     IN PPARTLIST List,
     IN ULONGLONG SectorCount,
     IN BOOLEAN AutoCreate)
 {
+    ERROR_NUMBER Error;
     PDISKENTRY DiskEntry;
     PPARTENTRY PartEntry;
     PPARTENTRY NewPartEntry;
@@ -2365,9 +2374,16 @@ CreatePrimaryPartition(
     if (List == NULL ||
         List->CurrentDisk == NULL ||
         List->CurrentPartition == NULL ||
-        List->CurrentPartition->IsPartitioned != FALSE)
+        List->CurrentPartition->IsPartitioned)
     {
-        return;
+        return FALSE;
+    }
+
+    Error = PrimaryPartitionCreationChecks(List);
+    if (Error != NOT_AN_ERROR)
+    {
+        DPRINT1("PrimaryPartitionCreationChecks() failed with error %lu\n", Error);
+        return FALSE;
     }
 
     DiskEntry = List->CurrentDisk;
@@ -2402,7 +2418,7 @@ CreatePrimaryPartition(
                                        HEAP_ZERO_MEMORY,
                                        sizeof(PARTENTRY));
         if (NewPartEntry == NULL)
-            return;
+            return FALSE;
 
         /* Insert the new entry into the list */
         InsertTailList(&PartEntry->ListEntry,
@@ -2434,6 +2450,8 @@ CreatePrimaryPartition(
     DiskEntry->Dirty = TRUE;
 
     AssignDriveLetters(List);
+
+    return TRUE;
 }
 
 static
@@ -2470,11 +2488,12 @@ AddLogicalDiskSpace(
                    &NewPartEntry->ListEntry);
 }
 
-VOID
+BOOLEAN
 CreateExtendedPartition(
     IN PPARTLIST List,
     IN ULONGLONG SectorCount)
 {
+    ERROR_NUMBER Error;
     PDISKENTRY DiskEntry;
     PPARTENTRY PartEntry;
     PPARTENTRY NewPartEntry;
@@ -2484,9 +2503,16 @@ CreateExtendedPartition(
     if (List == NULL ||
         List->CurrentDisk == NULL ||
         List->CurrentPartition == NULL ||
-        List->CurrentPartition->IsPartitioned != FALSE)
+        List->CurrentPartition->IsPartitioned)
     {
-        return;
+        return FALSE;
+    }
+
+    Error = ExtendedPartitionCreationChecks(List);
+    if (Error != NOT_AN_ERROR)
+    {
+        DPRINT1("ExtendedPartitionCreationChecks() failed with error %lu\n", Error);
+        return FALSE;
     }
 
     DiskEntry = List->CurrentDisk;
@@ -2532,7 +2558,7 @@ CreateExtendedPartition(
                                        HEAP_ZERO_MEMORY,
                                        sizeof(PARTENTRY));
         if (NewPartEntry == NULL)
-            return;
+            return FALSE;
 
         /* Insert the new entry into the list */
         InsertTailList(&PartEntry->ListEntry,
@@ -2578,14 +2604,17 @@ CreateExtendedPartition(
     DiskEntry->Dirty = TRUE;
 
     AssignDriveLetters(List);
+
+    return TRUE;
 }
 
-VOID
+BOOLEAN
 CreateLogicalPartition(
     IN PPARTLIST List,
     IN ULONGLONG SectorCount,
     IN BOOLEAN AutoCreate)
 {
+    ERROR_NUMBER Error;
     PDISKENTRY DiskEntry;
     PPARTENTRY PartEntry;
     PPARTENTRY NewPartEntry;
@@ -2595,9 +2624,16 @@ CreateLogicalPartition(
     if (List == NULL ||
         List->CurrentDisk == NULL ||
         List->CurrentPartition == NULL ||
-        List->CurrentPartition->IsPartitioned != FALSE)
+        List->CurrentPartition->IsPartitioned)
     {
-        return;
+        return FALSE;
+    }
+
+    Error = LogicalPartitionCreationChecks(List);
+    if (Error != NOT_AN_ERROR)
+    {
+        DPRINT1("LogicalPartitionCreationChecks() failed with error %lu\n", Error);
+        return FALSE;
     }
 
     DiskEntry = List->CurrentDisk;
@@ -2633,7 +2669,7 @@ CreateLogicalPartition(
                                        HEAP_ZERO_MEMORY,
                                        sizeof(PARTENTRY));
         if (NewPartEntry == NULL)
-            return;
+            return FALSE;
 
         /* Insert the new entry into the list */
         InsertTailList(&PartEntry->ListEntry,
@@ -2666,6 +2702,8 @@ CreateLogicalPartition(
     DiskEntry->Dirty = TRUE;
 
     AssignDriveLetters(List);
+
+    return TRUE;
 }
 
 VOID
@@ -2969,8 +3007,7 @@ CheckActiveSystemPartition(
     }
     // HACK: WARNING: We cannot write on this FS yet!
     // See fsutil.c:GetFileSystem()
-    if (List->OriginalSystemPartition->PartitionType == PARTITION_EXT2 ||
-        List->OriginalSystemPartition->PartitionType == PARTITION_IFS)
+    if (List->OriginalSystemPartition->PartitionType == PARTITION_IFS)
     {
         DPRINT1("Recognized file system %S that doesn't support write support yet!\n",
                 FileSystem->FileSystemName);
@@ -3281,7 +3318,7 @@ PrimaryPartitionCreationChecks(
     PartEntry = List->CurrentPartition;
 
     /* Fail if the partition is already in use */
-    if (PartEntry->IsPartitioned != FALSE)
+    if (PartEntry->IsPartitioned)
         return ERROR_NEW_PARTITION;
 
     /* Fail if there are already 4 primary partitions in the list */
@@ -3302,7 +3339,7 @@ ExtendedPartitionCreationChecks(
     PartEntry = List->CurrentPartition;
 
     /* Fail if the partition is already in use */
-    if (PartEntry->IsPartitioned != FALSE)
+    if (PartEntry->IsPartitioned)
         return ERROR_NEW_PARTITION;
 
     /* Fail if there are already 4 primary partitions in the list */
@@ -3327,7 +3364,7 @@ LogicalPartitionCreationChecks(
     PartEntry = List->CurrentPartition;
 
     /* Fail if the partition is already in use */
-    if (PartEntry->IsPartitioned != FALSE)
+    if (PartEntry->IsPartitioned)
         return ERROR_NEW_PARTITION;
 
     return ERROR_SUCCESS;
